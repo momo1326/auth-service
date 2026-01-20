@@ -54,10 +54,18 @@ async function init() {
       token_id TEXT NOT NULL UNIQUE,
       user_id INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
+      revoked BOOLEAN DEFAULT FALSE,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  // Add revoked column if not exists (for existing dbs)
+  try {
+    await run(`ALTER TABLE refresh_tokens ADD COLUMN revoked BOOLEAN DEFAULT FALSE`);
+  } catch (err) {
+    // Column might already exist, ignore
+  }
 }
 
 module.exports = {

@@ -42,8 +42,8 @@ async function createRefreshToken(user) {
   const expiresAt = decoded.exp || (now + expiresInSec);
 
   await db.run(
-    `INSERT INTO refresh_tokens (token_id, user_id, expires_at) VALUES (?, ?, ?)`,
-    [tokenId, user.id, expiresAt]
+    `INSERT INTO refresh_tokens (token_id, user_id, expires_at, revoked) VALUES (?, ?, ?, ?)`,
+    [tokenId, user.id, expiresAt, false]
   );
 
   return refreshToken;
@@ -106,16 +106,18 @@ router.post('/refresh', async (req, res) => {
       const row = await db.get(`SELECT * FROM refresh_tokens WHERE token_id = ?`, [tokenId]);
       if (!row) return res.status(401).json({ error: 'Refresh token revoked' });
 
+      if (row.revoked) return res.status(401).json({ error: 'Refresh token suspected compromise' });
+
       // optional: check expiry
       const now = Math.floor(Date.now() / 1000);
       if (row.expires_at < now) {
-        // cleanup
-        await db.run(`DELETE FROM refresh_tokens WHERE token_id = ?`, [tokenId]);
+        // mark revoked
+        await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_id = ?`, [tokenId]);
         return res.status(401).json({ error: 'Refresh token expired' });
       }
 
-      // rotate: delete old record and issue new refresh token
-      await db.run(`DELETE FROM refresh_tokens WHERE token_id = ?`, [tokenId]);
+      // rotate: mark old as revoked and issue new refresh token
+      await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_id = ?`, [tokenId]);
 
       const user = await db.get(`SELECT id, email FROM users WHERE id = ?`, [userId]);
       if (!user) return res.status(401).json({ error: 'User not found' });
@@ -136,15 +138,11 @@ router.post('/logout', async (req, res) => {
     const { refreshToken } = req.body;
     if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
 
-    jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, async (err, payload) => {
-      if (err) {
-        // If token invalid/expired, still respond 204 to avoid leaking state
-        return res.status(204).send();
-      }
-      const { tokenId } = payload;
-      await db.run(`DELETE FROM refresh_tokens WHERE token_id = ?`, [tokenId]);
-      res.status(204).send();
-    });
+    const payload = jwt.decode(refreshToken);
+    if (payload && payload.tokenId) {
+      await db.run(`DELETE FROM refresh_tokens WHERE token_id = ?`, [payload.tokenId]);
+    }
+    res.status(204).send();
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
