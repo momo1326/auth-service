@@ -51,8 +51,8 @@ async function init() {
   await run(`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL UNIQUE,
+      token_hash TEXT NOT NULL,
       user_id INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       revoked BOOLEAN DEFAULT FALSE,
