@@ -51,7 +51,8 @@ async function init() {
   await run(`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      token_id TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
       user_id INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       revoked BOOLEAN DEFAULT FALSE,
@@ -60,12 +61,21 @@ async function init() {
     )
   `);
 
-  // Add revoked column if not exists (for existing dbs)
+  // Add columns if not exists (for existing dbs)
+  try {
+    await run(`ALTER TABLE refresh_tokens ADD COLUMN session_id TEXT`);
+  } catch (err) {}
+  try {
+    await run(`ALTER TABLE refresh_tokens ADD COLUMN token_hash TEXT`);
+  } catch (err) {}
   try {
     await run(`ALTER TABLE refresh_tokens ADD COLUMN revoked BOOLEAN DEFAULT FALSE`);
-  } catch (err) {
-    // Column might already exist, ignore
-  }
+  } catch (err) {}
+  // Rename token_id to session_id if exists
+  try {
+    await run(`ALTER TABLE refresh_tokens RENAME COLUMN token_id TO session_id`);
+  } catch (err) {}
+
 }
 
 module.exports = {

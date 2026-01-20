@@ -27,9 +27,9 @@ async function createAccessToken(user) {
 }
 
 async function createRefreshToken(user) {
-  const tokenId = uuidv4();
+  const sessionId = uuidv4();
   const refreshToken = jwt.sign(
-    { userId: user.id, tokenId },
+    { userId: user.id, sessionId },
     REFRESH_TOKEN_SECRET,
     { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
   );
@@ -41,9 +41,12 @@ async function createRefreshToken(user) {
   const decoded = jwt.decode(refreshToken);
   const expiresAt = decoded.exp || (now + expiresInSec);
 
+  // Hash the refresh token
+  const tokenHash = await bcrypt.hash(refreshToken, BCRYPT_SALT_ROUNDS);
+
   await db.run(
-    `INSERT INTO refresh_tokens (token_id, user_id, expires_at, revoked) VALUES (?, ?, ?, ?)`,
-    [tokenId, user.id, expiresAt, false]
+    `INSERT INTO refresh_tokens (session_id, token_hash, user_id, expires_at, revoked) VALUES (?, ?, ?, ?, ?)`,
+    [sessionId, tokenHash, user.id, expiresAt, false]
   );
 
   return refreshToken;
@@ -101,23 +104,31 @@ router.post('/refresh', async (req, res) => {
 
     jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, async (err, payload) => {
       if (err) return res.status(401).json({ error: 'Invalid or expired refresh token' });
-      const { userId, tokenId } = payload;
-      // lookup tokenId
-      const row = await db.get(`SELECT * FROM refresh_tokens WHERE token_id = ?`, [tokenId]);
+      const { userId, sessionId } = payload;
+
+      // Hash the incoming token
+      const tokenHash = await bcrypt.hash(refreshToken, BCRYPT_SALT_ROUNDS);
+
+      // lookup by token_hash
+      const row = await db.get(`SELECT * FROM refresh_tokens WHERE token_hash = ?`, [tokenHash]);
       if (!row) return res.status(401).json({ error: 'Refresh token revoked' });
 
-      if (row.revoked) return res.status(401).json({ error: 'Refresh token suspected compromise' });
+      if (row.revoked) {
+        // Force logout of all sessions for this user
+        await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = ?`, [userId]);
+        return res.status(401).json({ error: 'Refresh token suspected compromise - all sessions logged out' });
+      }
 
       // optional: check expiry
       const now = Math.floor(Date.now() / 1000);
       if (row.expires_at < now) {
         // mark revoked
-        await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_id = ?`, [tokenId]);
+        await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = ?`, [tokenHash]);
         return res.status(401).json({ error: 'Refresh token expired' });
       }
 
       // rotate: mark old as revoked and issue new refresh token
-      await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_id = ?`, [tokenId]);
+      await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = ?`, [tokenHash]);
 
       const user = await db.get(`SELECT id, email FROM users WHERE id = ?`, [userId]);
       if (!user) return res.status(401).json({ error: 'User not found' });
@@ -138,11 +149,17 @@ router.post('/logout', async (req, res) => {
     const { refreshToken } = req.body;
     if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
 
-    const payload = jwt.decode(refreshToken);
-    if (payload && payload.tokenId) {
-      await db.run(`DELETE FROM refresh_tokens WHERE token_id = ?`, [payload.tokenId]);
-    }
-    res.status(204).send();
+    jwt.verify(refreshToken, REFRESH_TOKEN_SECRET, { ignoreExpiration: true }, async (err, payload) => {
+      if (err) {
+        // Invalid signature, cannot trust
+        return res.status(400).json({ error: 'Invalid refresh token' });
+      }
+      // Hash the token
+      const tokenHash = await bcrypt.hash(refreshToken, BCRYPT_SALT_ROUNDS);
+      // Mark as revoked
+      await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = ?`, [tokenHash]);
+      res.status(204).send();
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
