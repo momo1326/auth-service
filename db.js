@@ -49,6 +49,18 @@ async function init() {
   `);
 
   await run(`
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      ip_address TEXT NOT NULL,
+      failed_attempts INTEGER DEFAULT 0,
+      locked_until INTEGER,
+      updated_at INTEGER,
+      UNIQUE(email, ip_address)
+    )
+  `);
+
+  await run(`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT NOT NULL UNIQUE,
@@ -56,6 +68,8 @@ async function init() {
       user_id INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       revoked BOOLEAN DEFAULT FALSE,
+      refresh_count INTEGER DEFAULT 0,
+      last_refresh_at INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
@@ -70,6 +84,12 @@ async function init() {
   } catch (err) {}
   try {
     await run(`ALTER TABLE refresh_tokens ADD COLUMN revoked BOOLEAN DEFAULT FALSE`);
+  } catch (err) {}
+  try {
+    await run(`ALTER TABLE refresh_tokens ADD COLUMN refresh_count INTEGER DEFAULT 0`);
+  } catch (err) {}
+  try {
+    await run(`ALTER TABLE refresh_tokens ADD COLUMN last_refresh_at INTEGER`);
   } catch (err) {}
   // Rename token_id to session_id if exists
   try {

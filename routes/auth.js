@@ -81,11 +81,43 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
+    const ip = req.ip;
+    const now = Math.floor(Date.now() / 1000);
+
+    // Check rate limiting
+    const attempt = await db.get(`SELECT * FROM login_attempts WHERE email = ? AND ip_address = ?`, [email, ip]);
+    if (attempt && attempt.locked_until && attempt.locked_until > now) {
+      return res.status(429).json({ error: 'Too many failed attempts, try again later' });
+    }
+
     const user = await db.get(`SELECT id, email, password FROM users WHERE email = ?`, [email]);
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user) {
+      // Failed login
+      if (!attempt) {
+        await db.run(`INSERT INTO login_attempts (email, ip_address, failed_attempts, locked_until, updated_at) VALUES (?, ?, 1, NULL, ?)`, [email, ip, now]);
+      } else {
+        const newAttempts = attempt.failed_attempts + 1;
+        const locked = newAttempts >= 5 ? now + 15 * 60 : null;
+        await db.run(`UPDATE login_attempts SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE email = ? AND ip_address = ?`, [newAttempts, locked, now, email, ip]);
+      }
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!ok) {
+      // Failed login
+      if (!attempt) {
+        await db.run(`INSERT INTO login_attempts (email, ip_address, failed_attempts, locked_until, updated_at) VALUES (?, ?, 1, NULL, ?)`, [email, ip, now]);
+      } else {
+        const newAttempts = attempt.failed_attempts + 1;
+        const locked = newAttempts >= 5 ? now + 15 * 60 : null;
+        await db.run(`UPDATE login_attempts SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE email = ? AND ip_address = ?`, [newAttempts, locked, now, email, ip]);
+      }
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Successful login
+    await db.run(`DELETE FROM login_attempts WHERE email = ? AND ip_address = ?`, [email, ip]);
 
     const accessToken = await createAccessToken(user);
     const refreshToken = await createRefreshToken(user);
@@ -114,6 +146,18 @@ router.post('/refresh', async (req, res) => {
       const isValidToken = await bcrypt.compare(refreshToken, row.token_hash);
       if (!isValidToken) return res.status(401).json({ error: 'Invalid refresh token' });
 
+      // Rate limiting: max 10 refreshes per hour per session
+      const now = Math.floor(Date.now() / 1000);
+      const oneHourAgo = now - 3600;
+      if (row.last_refresh_at && row.last_refresh_at < oneHourAgo) {
+        await db.run(`UPDATE refresh_tokens SET refresh_count = 0, last_refresh_at = ? WHERE session_id = ?`, [now, sessionId]);
+        row.refresh_count = 0;
+      }
+      if (row.refresh_count >= 10) {
+        await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE session_id = ?`, [sessionId]);
+        return res.status(429).json({ error: 'Too many refresh attempts, session revoked' });
+      }
+
       if (row.revoked) {
         // Force logout of all sessions for this user
         console.warn(`Security incident: Revoked refresh token used for user ${userId}, logging out all sessions`);
@@ -122,7 +166,6 @@ router.post('/refresh', async (req, res) => {
       }
 
       // optional: check expiry
-      const now = Math.floor(Date.now() / 1000);
       if (row.expires_at < now) {
         // mark revoked
         await db.run(`UPDATE refresh_tokens SET revoked = TRUE WHERE session_id = ?`, [sessionId]);
@@ -137,6 +180,9 @@ router.post('/refresh', async (req, res) => {
 
       const accessToken = await createAccessToken(user);
       const newRefreshToken = await createRefreshToken(user);
+
+      // Increment refresh count
+      await db.run(`UPDATE refresh_tokens SET refresh_count = refresh_count + 1, last_refresh_at = ? WHERE session_id = ?`, [now, sessionId]);
 
       res.json({ accessToken, refreshToken: newRefreshToken });
     });

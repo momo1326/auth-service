@@ -7,6 +7,7 @@ const db = require('./db');
 const authRoutes = require('./routes/auth');
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(bodyParser.json());
 
 // initialize DB (creates tables if needed)
