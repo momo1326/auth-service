@@ -96,7 +96,18 @@ async function init() {
     await run(`ALTER TABLE refresh_tokens RENAME COLUMN token_id TO session_id`);
   } catch (err) {}
 
+  await run(`CREATE INDEX IF NOT EXISTS idx_login_attempts_email_ip ON login_attempts(email, ip_address)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at)`);
+
+  // Cleanup old revoked/expired refresh tokens.
+  const now = Math.floor(Date.now() / 1000);
+  const thirtyDaysAgo = now - (30 * 24 * 60 * 60);
+  await run(`DELETE FROM refresh_tokens WHERE (revoked = TRUE OR expires_at < ?) AND created_at < datetime(?, 'unixepoch')`, [now, thirtyDaysAgo]);
+  await run(`DELETE FROM login_attempts WHERE updated_at IS NOT NULL AND updated_at < ?`, [thirtyDaysAgo]);
+
 }
+
 
 module.exports = {
   open,

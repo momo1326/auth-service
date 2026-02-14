@@ -14,7 +14,7 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Invalid authorization header format' });
   }
   const token = parts[1];
-  jwt.verify(token, ACCESS_TOKEN_SECRET, (err, payload) => {
+  jwt.verify(token, ACCESS_TOKEN_SECRET, { algorithms: ['HS256'] }, (err, payload) => {
     if (err) return res.status(401).json({ error: 'Invalid or expired token' });
     req.user = { id: payload.userId, email: payload.email };
     next();
