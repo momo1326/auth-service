@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Application Tracker SaaS</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7fafc; }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+    .card { background: #fff; border-radius: 10px; padding: 1rem; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+  </style>
+</head>
+<body>
+  <h1>Job Application Tracker Dashboard</h1>
+  <p>Use API endpoints with JWT auth. This page renders analytics from <code>/api/dashboard</code>.</p>
+  <div class="grid" id="statusGrid"></div>
+  <div class="card">
+    <h3>Applications per Month</h3>
+    <pre id="monthData">Load data from API with your access token in localStorage.accessToken</pre>
+  </div>
+  <script>
+    async function run() {
+      const token = localStorage.getItem('accessToken');
+      if (!token) return;
+      const res = await fetch('/api/dashboard', { headers: { Authorization: `Bearer ${token}` }});
+      if (!res.ok) return;
+      const data = await res.json();
+      const grid = document.getElementById('statusGrid');
+      grid.innerHTML = ['Applied','Interview','Offer','Rejected'].map((s) => {
+        const row = data.byStatus.find((x) => x.status === s);
+        return `<div class="card"><h3>${s}</h3><p>${row ? row.count : 0}</p></div>`;
+      }).join('');
+      document.getElementById('monthData').textContent = JSON.stringify(data.byMonth, null, 2);
+    }
+    run();
+  </script>
+</body>
+</html>

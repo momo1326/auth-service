@@ -1,13 +1,19 @@
 require('dotenv').config();
 
 const express = require('express');
+const path = require('path');
 
-const db = require('./db');
-const authRoutes = require('./routes/auth');
+const db = require('./src/models/db');
+const authRoutes = require('./src/routes/authRoutes');
+const appRoutes = require('./src/routes/applicationRoutes');
+const adminRoutes = require('./src/routes/adminRoutes');
+const { errorHandler } = require('./src/middleware/errorHandler');
+const logger = require('./src/utils/logger');
 
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
 app.use(express.json({ limit: '10kb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -16,14 +22,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// initialize DB (creates tables if needed)
-db.init();
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api/auth', authRoutes);
+app.use('/api', appRoutes);
+app.use('/api/admin', adminRoutes);
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.use('/', authRoutes);
-
-app.get('/', (req, res) => res.json({ ok: true }));
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`auth-service listening on http://localhost:${PORT}`);
-});
+
+(async () => {
+  await db.init();
+  app.listen(PORT, () => logger.info('job-tracker-api listening', { port: PORT }));
+})();
